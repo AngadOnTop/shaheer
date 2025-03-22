@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>8-Ball Pool by Shaheer Syed</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;700&display=swap');
+
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: #2c3e50;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            font-family: 'Poppins', sans-serif;
+        }
+        #game-wrapper {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        #ui-container {
+            display: none;
+            justify-content: space-between;
+            width: 800px;
+            margin-bottom: 10px;
+        }
+        #player1-status, #player2-status, #scoreboard {
+            background: #34495e;
+            color: #ecf0f1;
+            padding: 5px 10px;
+            border-radius: 5px;
+            font-size: 18px;
+            transition: background 0.3s ease;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+        }
+        #player1-status.active, #player2-status.active {
+            background: #0353A4;
+        }
+        #game-container {
+            position: relative;
+            width: 800px;
+            height: 400px;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.2);
+        }
+        canvas {
+            background: #145214;
+            border: 20px solid #8B4513;
+            border-radius: 10px;
+        }
+        #menu {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: #145214;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            color: #ecf0f1;
+            transition: opacity 0.3s ease;
+            z-index: 10;
+        }
+        #menu.hidden {
+            display: none;
+        }
+        #menu p {
+            margin-top: 20px;
+            font-size: 14px;
+            color: #bdc3c7;
+        }
+        #power-meter {
+            position: absolute;
+            bottom: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 200px;
+            height: 20px;
+            background: #34495e;
+            border: 2px solid #ecf0f1;
+            border-radius: 10px;
+            overflow: hidden;
+            display: none;
+        }
+        #power-fill {
+            width: 0%;
+            height: 100%;
+            background: linear-gradient(to right, #e74c3c, #2ecc71);
+            transition: width 0.1s linear;
+        }
+        button {
+            padding: 15px 30px;
+            font-size: 20px;
+            cursor: pointer;
+            margin: 10px;
+            background: #3498db;
+            border: 2px solid #ecf0f1;
+            color: #ecf0f1;
+            border-radius: 8px;
+            transition: transform 0.2s, background 0.2s;
+        }
+        button:hover {
+            background: #2980b9;
+            transform: scale(1.05);
+        }
+        button:active {
+            transform: scale(0.95);
+        }
+    </style>
+</head>
+<body>
+    <div id="game-wrapper">
+        <div id="ui-container">
+            <div id="player1-status">Player 1: Unassigned</div>
+            <div id="scoreboard">Solids: 0 | Stripes: 0</div>
+            <div id="player2-status">Player 2: Unassigned</div>
+        </div>
+        <div id="game-container">
+            <div id="menu">
+                <button onclick="startGame()">Start Game</button>
+                <p>Made by Shaheer</p>
+            </div>
+            <div id="power-meter">
+                <div id="power-fill"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+    <script>
+        const Engine = Matter.Engine,
+              Render = Matter.Render,
+              World = Matter.World,
+              Bodies = Matter.Bodies,
+              Body = Matter.Body,
+              Events = Matter.Events,
+              Vector = Matter.Vector,
+              Query = Matter.Query;
+
+        let engine, render, world;
+        let cueBall, balls = [], pockets = [];
+        let player1Score = 0, player2Score = 0;
+        let currentPlayer = 1;
+        let isShooting = false;
+        let player1Type = null, player2Type = null;
+        const powerMeter = document.getElementById('power-meter');
+        const powerFill = document.getElementById('power-fill');
+        let isDragging = false;
+        let dragStart = null;
+        let ghostCueBall = null;
+        let scoredThisTurn = false;
+        let ballsToRemove = [];
+
+        const BALL_CATEGORY = 0x0001;
+        const POCKET_CATEGORY = 0x0002;
+        const WALL_CATEGORY = 0x0004;
+        const GHOST_CATEGORY = 0x0008;
+
+        // Ball properties - fixed values for consistency
+        const BALL_RADIUS = 15;
+        const BALL_RESTITUTION = 0.9;
+        const BALL_FRICTION = 0.005;
+        const BALL_FRICTION_AIR = 0.03;
+        const BALL_DENSITY = 0.001;
+
+        function solidNormalSVG(color) {
+            // Fixed SVG size to match twice the ball radius
+            return `<svg width="${BALL_RADIUS * 2}" height="${BALL_RADIUS * 2}" viewBox="0 0 30 30" xmlns="http://www.w3.org/2000/svg">
+                <circle cx="15" cy="15" r="14" fill="${color}" />
+                <circle cx="15" cy="15" r="8" fill="none" stroke="white" stroke-width="2" />
+            </svg>`;
+        }
+
+        function solidSelectedSVG(color) {
+            // Fixed SVG size to match twice the ball radius
+            return `<svg width="${BALL_RADIUS * 2}" height="${BALL_RADIUS * 2}" viewBox="0 0 30 30" xmlns="http://www.w3.org/2000/svg">
+                <circle cx="15" cy="15" r="14" fill="${color}" stroke="#00ff00" stroke-width="2" />
+                <circle cx="15" cy="15" r="8" fill="none" stroke="white" stroke-width="2" />
+            </svg>`;
+        }
+
+        function stripeNormalSVG(color) {
+            // Fixed SVG size to match twice the ball radius
+            return `<svg width="${BALL_RADIUS * 2}" height="${BALL_RADIUS * 2}" viewBox="0 0 30 30" xmlns="http://www.w3.org/2000/svg">
+                <circle cx="15" cy="15" r="14" fill="${color}" />
+                <rect x="3" y="9" width="24" height="12" rx="2" fill="white" />
+            </svg>`;
+        }
+
+        function stripeSelectedSVG(color) {
+            // Fixed SVG size to match twice the ball radius
+            return `<svg width="${BALL_RADIUS * 2}" height="${BALL_RADIUS * 2}" viewBox="0 0 30 30" xmlns="http://www.w3.org/2000/svg">
+                <circle cx="15" cy="15" r="14" fill="${color}" stroke="#00ff00" stroke-width="2" />
+                <rect x="3" y="9" width="24" height="12" rx="2" fill="white" />
+            </svg>`;
+        }
+
+        function eightBallSVG() {
+            // Fixed SVG size to match twice the ball radius
+            return `<svg width="${BALL_RADIUS * 2}" height="${BALL_RADIUS * 2}" viewBox="0 0 30 30" xmlns="http://www.w3.org/2000/svg">
+                <circle cx="15" cy="15" r="14" fill="#000000" />
+            </svg>`;
+        }
+
+        function updateBallAppearance() {
+            const currentType = currentPlayer === 1 ? player1Type : player2Type;
+            balls.forEach(ball => {
+                if (ball.label === 'eight') return;
+                if (currentType && ball.label === currentType) {
+                    ball.render.sprite.texture = ball.selectedSprite;
+                } else {
+                    ball.render.sprite.texture = ball.normalSprite;
+                }
+            });
+        }
+
+        function startGame() {
+            resetGame();
+            document.getElementById('menu').classList.add('hidden');
+            document.getElementById('ui-container').style.display = 'flex';
+            document.getElementById('power-meter').style.display = 'block';
+            document.getElementById('player1-status').classList.add('active');
+            document.getElementById('player2-status').classList.remove('active');
+            initGame();
+        }
+
+        function resetGame() {
+            if (engine) {
+                World.clear(world);
+                Engine.clear(engine);
+                Render.stop(render);
+                render.canvas.remove();
+                engine = null;
+                render = null;
+                world = null;
+            }
+            player1Score = 0;
+            player2Score = 0;
+            currentPlayer = 1;
+            player1Type = null;
+            player2Type = null;
+            balls = [];
+            pockets = [];
+            ballsToRemove = [];
+            scoredThisTurn = false;
+            document.getElementById('player1-status').textContent = 'Player 1: Unassigned';
+            document.getElementById('player2-status').textContent = 'Player 2: Unassigned';
+            document.getElementById('scoreboard').textContent = 'Solids: 0 | Stripes: 0';
+            document.getElementById('menu').classList.remove('hidden');
+            document.getElementById('ui-container').style.display = 'none';
+            document.getElementById('power-meter').style.display = 'none';
+        }
+
+        function initGame() {
+            // Create engine with improved settings for better physics
+            engine = Engine.create({
+                enableSleeping: false,
+                constraintIterations: 4
+            });
+            
+            world = engine.world;
+            world.gravity.y = 0;
+            engine.timing.timeScale = 1.0;
+            engine.positionIterations = 12;
+            engine.velocityIterations = 12;
+
+            render = Render.create({
+                element: document.getElementById('game-container'),
+                engine: engine,
+                options: {
+                    width: 800,
+                    height: 400,
+                    wireframes: false,
+                    background: '#145214',
+                    showCollisions: false,
+                    showVelocity: false
+                }
+            });
+
+            const wallOptions = { 
+                isStatic: true, 
+                render: { fillStyle: '#8B4513' }, 
+                label: 'wall', 
+                restitution: 0.5,
+                collisionFilter: { 
+                    category: WALL_CATEGORY,
+                    mask: BALL_CATEGORY 
+                }
+            };
+            
+            const wallThickness = 40;
+            World.add(world, [
+                Bodies.rectangle(400, -wallThickness / 2, 800, wallThickness, wallOptions), // Top
+                Bodies.rectangle(400, 400 + wallThickness / 2, 800, wallThickness, wallOptions), // Bottom
+                Bodies.rectangle(-wallThickness / 2, 200, wallThickness, 400, wallOptions), // Left
+                Bodies.rectangle(800 + wallThickness / 2, 200, wallThickness, 400, wallOptions) // Right
+            ]);
+
+            // Improved pocket size for consistent collision detection
+            const pocketRadius = BALL_RADIUS * 1.5;
+            const pocketOptions = { 
+                isStatic: true, 
+                isSensor: true, 
+                render: { fillStyle: '#000' }, 
+                label: 'pocket', 
+                collisionFilter: { 
+                    category: POCKET_CATEGORY,
+                    mask: BALL_CATEGORY 
+                }
+            };
+            
+            pockets.push(Bodies.circle(20, 20, pocketRadius, pocketOptions));
+            pockets.push(Bodies.circle(780, 20, pocketRadius, pocketOptions));
+            pockets.push(Bodies.circle(20, 380, pocketRadius, pocketOptions));
+            pockets.push(Bodies.circle(780, 380, pocketRadius, pocketOptions));
+            pockets.push(Bodies.circle(400, 20, pocketRadius, pocketOptions));
+            pockets.push(Bodies.circle(400, 380, pocketRadius, pocketOptions));
+            World.add(world, pockets);
+
+            // Create cue ball with consistent physics settings
+            cueBall = Bodies.circle(200, 200, BALL_RADIUS, {
+                restitution: BALL_RESTITUTION,
+                friction: BALL_FRICTION,
+                frictionAir: BALL_FRICTION_AIR,
+                density: BALL_DENSITY,
+                render: { fillStyle: 'white' },
+                label: 'cueBall',
+                slop: 0,
+                collisionFilter: { 
+                    category: BALL_CATEGORY,
+                    mask: BALL_CATEGORY | WALL_CATEGORY | POCKET_CATEGORY 
+                }
+            });
+
+            const ballTypes = {
+                solids: ['#ff0000', '#0000ff', '#ff00ff', '#00ff00', '#ffff00', '#00ffff', '#ff8000'],
+                stripes: ['#ff6666', '#6666ff', '#ff66ff', '#66ff66', '#ffff66', '#66ffff', '#ffa366'],
+                eight: ['#000000']
+            };
+
+            let ballNum = 1;
+            for (let i = 0; i < 5; i++) {
+                for (let j = 0; j < i + 1; j++) {
+                    let color, type, normalSVG, selectedSVG;
+                    if (ballNum === 8) {
+                        color = ballTypes.eight[0];
+                        type = 'eight';
+                        normalSVG = eightBallSVG();
+                    } else if (ballNum <= 7) {
+                        color = ballTypes.solids[ballNum - 1];
+                        type = 'solids';
+                        normalSVG = solidNormalSVG(color);
+                        selectedSVG = solidSelectedSVG(color);
+                    } else {
+                        color = ballTypes.stripes[ballNum - 8];
+                        type = 'stripes';
+                        normalSVG = stripeNormalSVG(color);
+                        selectedSVG = stripeSelectedSVG(color);
+                    }
+                    const normalDataURL = 'data:image/svg+xml;base64,' + btoa(normalSVG);
+                    const ball = Bodies.circle(
+                        500 + i * 30,
+                        200 - i * 15 + j * 30,
+                        BALL_RADIUS,
+                        {
+                            restitution: BALL_RESTITUTION,
+                            friction: BALL_FRICTION,
+                            frictionAir: BALL_FRICTION_AIR,
+                            density: BALL_DENSITY,
+                            slop: 0,
+                            render: {
+                                sprite: {
+                                    texture: normalDataURL,
+                                    xScale: 1,
+                                    yScale: 1
+                                }
+                            },
+                            label: type,
+                            ballId: ballNum,
+                            collisionFilter: { 
+                                category: BALL_CATEGORY,
+                                mask: BALL_CATEGORY | WALL_CATEGORY | POCKET_CATEGORY 
+                            }
+                        }
+                    );
+                    if (type !== 'eight') {
+                        const selectedDataURL = 'data:image/svg+xml;base64,' + btoa(selectedSVG);
+                        ball.normalSprite = normalDataURL;
+                        ball.selectedSprite = selectedDataURL;
+                    }
+                    balls.push(ball);
+                    ballNum++;
+                }
+            }
+
+            World.add(world, [cueBall, ...balls]);
+            Engine.run(engine);
+            Render.run(render);
+
+            render.canvas.addEventListener('mousedown', startDrag);
+            render.canvas.addEventListener('mousemove', updateDrag);
+            render.canvas.addEventListener('mouseup', shoot);
+
+            Events.on(engine, 'afterUpdate', checkBallStop);
+            Events.on(engine, 'afterUpdate', checkPocketCollisions);
+        }
+
+        function startDrag(event) {
+            if (!isShooting) {
+                const mousePos = { x: event.offsetX, y: event.offsetY };
+                const cuePos = cueBall.position;
+                // Improved detection radius for better user experience
+                if (Vector.magnitude(Vector.sub(mousePos, cuePos)) < BALL_RADIUS * 1.2) {
+                    isDragging = true;
+                    dragStart = { x: cuePos.x, y: cuePos.y };
+                    powerMeter.style.display = 'block';
+                    if (!ghostCueBall) {
+                        ghostCueBall = Bodies.circle(cuePos.x, cuePos.y, BALL_RADIUS, {
+                            isStatic: true,
+                            isSensor: true,
+                            collisionFilter: { 
+                                category: GHOST_CATEGORY,
+                                mask: 0 
+                            },
+                            render: { fillStyle: 'rgba(255, 255, 255, 0.5)' }
+                        });
+                        World.add(world, ghostCueBall);
+                    }
+                    Body.setVelocity(cueBall, { x: 0, y: 0 });
+                    Body.setAngularVelocity(cueBall, 0);
+                }
+            }
+        }
+
+        function updateDrag(event) {
+            if (isDragging && !isShooting) {
+                const mousePos = { x: event.offsetX, y: event.offsetY };
+                const dragVector = Vector.sub(dragStart, mousePos);
+                const distance = Math.min(Vector.magnitude(dragVector), 100);
+                const direction = Vector.normalise(dragVector);
+                const newPos = Vector.add(dragStart, Vector.mult(direction, distance));
+
+                Body.setPosition(ghostCueBall, newPos);
+                powerFill.style.width = `${(distance / 100) * 100}%`;
+            }
+        }
+
+        function shoot(event) {
+            if (isDragging && !isShooting) {
+                isShooting = true;
+                isDragging = false;
+                powerMeter.style.display = 'none';
+                scoredThisTurn = false;
+
+                const mousePos = { x: event.offsetX, y: event.offsetY };
+                const dragVector = Vector.sub(dragStart, mousePos);
+                const distance = Math.min(Vector.magnitude(dragVector), 100);
+                const direction = Vector.normalise(dragVector);
+                // Consistent force application
+                const force = Vector.mult(direction, distance * 0.0006);
+
+                Body.applyForce(cueBall, cueBall.position, force);
+                if (ghostCueBall) {
+                    World.remove(world, ghostCueBall);
+                    ghostCueBall = null;
+                }
+            }
+        }
+
+        function checkBallStop() {
+            if (isShooting) {
+                // Process any balls that need to be removed
+                while (ballsToRemove.length > 0) {
+                    const ball = ballsToRemove.pop();
+                    processBallRemoval(ball);
+                }
+
+                // Check if all balls have stopped moving
+                let allBallsStopped = true;
+                
+                // More strict velocity check for the cue ball
+                if (Vector.magnitude(cueBall.velocity) > 0.05) {
+                    allBallsStopped = false;
+                }
+                
+                // Check other balls
+                for (let i = 0; i < balls.length; i++) {
+                    if (Vector.magnitude(balls[i].velocity) > 0.05) {
+                        allBallsStopped = false;
+                        break;
+                    }
+                }
+                
+                if (allBallsStopped) {
+                    // Ensure all balls have completely stopped
+                    balls.forEach(ball => {
+                        Body.setVelocity(ball, { x: 0, y: 0 });
+                        Body.setAngularVelocity(ball, 0);
+                    });
+                    
+                    Body.setVelocity(cueBall, { x: 0, y: 0 });
+                    Body.setAngularVelocity(cueBall, 0);
+                    
+                    isShooting = false;
+                    if (!scoredThisTurn) {
+                        switchTurn();
+                    }
+                    scoredThisTurn = false;
+                    powerMeter.style.display = 'block';
+                }
+            }
+        }
+
+        function checkPocketCollisions() {
+            // Check each pocket for overlapping balls
+            pockets.forEach(pocket => {
+                // Check for balls falling into pockets
+                balls.forEach(ball => {
+                    const distance = Vector.magnitude(
+                        Vector.sub(pocket.position, ball.position)
+                    );
+                    
+                    // Fixed collision detection - removed the multiplier for more consistent detection
+                    if (distance < pocket.circleRadius + ball.circleRadius) {
+                        if (!ballsToRemove.includes(ball)) {
+                            ballsToRemove.push(ball);
+                        }
+                    }
+                });
+                
+                // Check for cue ball falling into pocket
+                const cueBallDistance = Vector.magnitude(
+                    Vector.sub(pocket.position, cueBall.position)
+                );
+                
+                // Fixed collision detection for cue ball too
+                if (cueBallDistance < pocket.circleRadius + cueBall.circleRadius) {
+                    // Handle cue ball in pocket
+                    Body.setPosition(cueBall, { x: 200, y: 200 });
+                    Body.setVelocity(cueBall, { x: 0, y: 0 });
+                    Body.setAngularVelocity(cueBall, 0);
+                    switchTurn();
+                }
+            });
+        }
+
+        function processBallRemoval(ball) {
+            // Remove the ball from the world
+            World.remove(world, ball);
+            
+            // Remove from our balls array
+            const index = balls.indexOf(ball);
+            if (index !== -1) {
+                balls.splice(index, 1);
+            }
+            
+            if (ball.label === 'eight') {
+                endGame();
+            } else if (!player1Type) {
+                player1Type = ball.label;
+                player2Type = ball.label === 'solids' ? 'stripes' : 'solids';
+                document.getElementById('player1-status').textContent = `Player 1: ${player1Type.charAt(0).toUpperCase() + player1Type.slice(1)}`;
+                document.getElementById('player2-status').textContent = `Player 2: ${player2Type.charAt(0).toUpperCase() + player2Type.slice(1)}`;
+                updateScore(currentPlayer, 1);
+                scoredThisTurn = true;
+                updateBallAppearance();
+            } else if ((currentPlayer === 1 && player1Type === ball.label) ||
+                      (currentPlayer === 2 && player2Type === ball.label)) {
+                updateScore(currentPlayer, 1);
+                scoredThisTurn = true;
+            } else {
+                switchTurn();
+            }
+        }
+
+        function switchTurn() {
+            currentPlayer = currentPlayer === 1 ? 2 : 1;
+            document.getElementById('player1-status').classList.toggle('active', currentPlayer === 1);
+            document.getElementById('player2-status').classList.toggle('active', currentPlayer === 2);
+            updateBallAppearance();
+        }
+
+        function updateScore(player, points) {
+            if (player === 1) {
+                player1Score += points;
+            } else {
+                player2Score += points;
+            }
+            document.getElementById('scoreboard').textContent = 
+                `Solids: ${player1Type === 'solids' ? player1Score : player2Score} | Stripes: ${player1Type === 'stripes' ? player1Score : player2Score}`;
+        }
+
+        function endGame() {
+            const winner = (player1Type === 'solids' && player1Score === 7) || 
+                          (player1Type === 'stripes' && player1Score === 7) ? 1 : 2;
+            alert(`Player ${winner} wins!`);
+            resetGame();
+        }
+    </script>
+</body>
+</html>
